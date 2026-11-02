@@ -82,6 +82,60 @@ const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
 const state={recipient:'self',origin:'local',method:'card',user:null,service:null,reason:'',payment:'',wantsExtra:false,extraService:null,extraReason:'',date:'',time:'',editingId:null};
 const presetOrigin=new URLSearchParams(location.search).get('origem');if(presetOrigin==='intercambio')state.origin='interchange';
 
+
+/* Sincronização demonstrativa do pitch.
+   Envia SOMENTE dados operacionais anonimizados para que agendamentos
+   feitos em outros aparelhos apareçam no painel. Nenhum nome, CPF,
+   carteirinha ou data de nascimento é enviado. */
+const sharedDemoApi={
+  endpoint:'https://api.restful-api.dev/objects',
+  projectKey:'unimed-sem-fila-divinopolis-pitch-final-2026'
+};
+function representativeAge(age){
+  const n=Number(age);
+  if(!Number.isFinite(n))return 35;
+  if(n<18)return 10;
+  if(n<30)return 23;
+  if(n<45)return 35;
+  if(n<60)return 50;
+  return 65;
+}
+async function publishSharedBooking(booking){
+  const payload={
+    projectKey:sharedDemoApi.projectKey,
+    type:'appointment',
+    protocol:String(booking.protocol||booking.id||''),
+    user:'Participante QR',
+    age:representativeAge(booking.age),
+    origin:booking.origin==='interchange'?'interchange':'local',
+    service:String(booking.service||'Outros'),
+    sector:String(booking.sector||'Atendimento Geral'),
+    reason:String(booking.reason||booking.service||'Atendimento'),
+    payment:booking.service&&String(booking.service).includes('Negociação')?String(booking.payment||'—'):'—',
+    date:String(booking.date||''),
+    time:String(booking.time||''),
+    duration:Number(booking.duration||20),
+    blocks:Number(booking.blocks||1),
+    status:'Agendado',
+    createdAt:new Date().toISOString()
+  };
+  try{
+    const response=await fetch(sharedDemoApi.endpoint,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        name:'UNIMED_SEM_FILA_'+payload.protocol,
+        data:payload
+      })
+    });
+    if(!response.ok)throw new Error('HTTP '+response.status);
+  }catch(error){
+    /* A demonstração local continua funcionando mesmo se a base externa
+       estiver temporariamente indisponível. */
+    console.warn('[Sem Fila] Não foi possível sincronizar o agendamento do pitch.',error);
+  }
+}
+
 function store(){return JSON.parse(localStorage.getItem('semfila_bookings_v8')||'[]')}
 function save(v){localStorage.setItem('semfila_bookings_v8',JSON.stringify(v))}
 function show(id,step){$$('.screen').forEach(x=>x.classList.remove('active'));$('#'+id).classList.add('active');updateProgress(step);window.scrollTo({top:0,behavior:'smooth'})}
@@ -150,7 +204,7 @@ function renderDates(){const dates=businessDates(10),strip=$('#dateStrip');strip
 function renderSlots(){const box=$('#slots');box.innerHTML='';$('#toReview').disabled=true;const d=new Date(state.date+'T12:00:00');$('#dateCaption').textContent=`Horários disponíveis para ${d.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'})}`;baseSlots.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='slot-btn';b.textContent=t;if(!canStart(state.date,t)){b.classList.add('occupied');b.disabled=true;b.title='Não há capacidade contínua para todo o atendimento'}else b.onclick=()=>{state.time=t;$$('.slot-btn').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');$('#toReview').disabled=false};box.appendChild(b)})}
 $('#backService').onclick=()=>show('screen-service',2);$('#toReview').onclick=()=>{renderSummary('#reviewSummary');show('screen-review',4)};$('#backSchedule').onclick=()=>show('screen-schedule',3);
 function renderSummary(target){$(target).innerHTML=[['Beneficiário',state.user.name],['Identificação',maskIdentity(state.user.identity,state.user.method)],['Origem',state.user.origin==='interchange'?state.user.originUnimed:'Unimed Divinópolis'],['Assuntos',serviceLabel()],['Motivos',reasonLabel()],['Pagamento',state.payment||'—'],['Tempo reservado',durationMinutes()+' minutos'],['Data',brDate(state.date)],['Horário',state.time]].map(([a,b])=>`<div class="summary-row"><span>${escapeHtml(a)}</span><b>${escapeHtml(b)}</b></div>`).join('')}
-$('#confirmBtn').onclick=()=>{const p=protocol(),booking={id:p,protocol:p,user:state.user.name,identity:state.user.identity,birth:state.user.birth,age:state.user.age,method:state.user.method,recipient:state.user.recipient,origin:state.user.origin,originUnimed:state.user.originUnimed,service:serviceLabel(),sector:(state.wantsExtra&&state.extraService&&state.extraService.sector!==state.service.sector?state.service.sector+' + '+state.extraService.sector:state.service.sector),reason:reasonLabel(),payment:state.payment||'—',date:state.date,time:state.time,status:'Agendado',blocks:durationBlocks(),duration:durationMinutes(),created:new Date().toISOString()};const list=store();list.push(booking);save(list);$('#protocol').textContent=p;renderSummary('#successSummary');show('screen-success',4)};
+$('#confirmBtn').onclick=()=>{const p=protocol(),booking={id:p,protocol:p,user:state.user.name,identity:state.user.identity,birth:state.user.birth,age:state.user.age,method:state.user.method,recipient:state.user.recipient,origin:state.user.origin,originUnimed:state.user.originUnimed,service:serviceLabel(),sector:(state.wantsExtra&&state.extraService&&state.extraService.sector!==state.service.sector?state.service.sector+' + '+state.extraService.sector:state.service.sector),reason:reasonLabel(),payment:state.payment||'—',date:state.date,time:state.time,status:'Agendado',blocks:durationBlocks(),duration:durationMinutes(),created:new Date().toISOString()};const list=store();list.push(booking);save(list);publishSharedBooking(booking);$('#protocol').textContent=p;renderSummary('#successSummary');show('screen-success',4)};
 $('#newSchedule').onclick=startSchedule;$('#goMy').onclick=()=>{renderMy();show('screen-my',4)};$('#myBookingsTop').onclick=()=>{if(!state.user){toast('Identifique-se primeiro.');return}renderMy();show('screen-my',4)};$('#panelTop').onclick=()=>window.location.href='painel.html';$('#backMy').onclick=()=>show(state.user?'screen-service':'screen-identification',state.user?2:1);
 function currentBookings(){return state.user?store().filter(b=>b.identity===state.user.identity).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)):[]}
 function renderMy(){const box=$('#myAppointments'),list=currentBookings();if(!list.length){box.innerHTML='<div class="empty-state">Nenhum agendamento encontrado.</div>';return}box.innerHTML='';list.forEach(b=>{const card=document.createElement('article');card.className='booking-card';const allowed=canCancel(b)&&b.status!=='Cancelado';card.innerHTML=`<div><span class="booking-status ${b.status==='Cancelado'?'cancelled':''}">${escapeHtml(b.status)}</span><h3>${escapeHtml(b.service)}</h3><p>${escapeHtml(b.reason)}</p><small>${brDate(b.date)} às ${escapeHtml(b.time)} • ${b.duration||20} min • ${escapeHtml(b.protocol)}</small></div><button class="secondary-btn cancel-booking" ${allowed?'':'disabled'}>Cancelar</button>`;card.querySelector('.cancel-booking').onclick=()=>{if(!allowed)return;save(store().map(x=>x.id===b.id?{...x,status:'Cancelado'}:x));renderMy();toast('Agendamento cancelado. A vaga foi liberada.')};box.appendChild(card)})}

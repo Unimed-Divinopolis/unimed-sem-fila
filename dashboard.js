@@ -9,6 +9,56 @@ const state={
   end:null
 };
 
+
+/* Agendamentos compartilhados do pitch.
+   São somados aos dados fictícios já existentes sem alterar o layout. */
+const sharedDemoApi={
+  endpoint:'https://api.restful-api.dev/objects',
+  projectKey:'unimed-sem-fila-divinopolis-pitch-final-2026',
+  refreshMs:30000
+};
+let sharedAppointments=[];
+let sharedRefreshCount=0;
+const sharedRefreshLimit=30;
+function sharedBookingKey(b){return String((b&&(b.protocol||b.id))||'')}
+function remoteToBooking(item){
+  const d=item&&item.data||{};
+  return normalizeBooking({
+    id:'QR-'+String(item.id||d.protocol||''),
+    protocol:String(d.protocol||item.id||''),
+    user:'Participante QR',
+    age:Number(d.age||35),
+    origin:d.origin==='interchange'?'interchange':'local',
+    service:String(d.service||'Outros'),
+    sector:String(d.sector||'Atendimento Geral'),
+    reason:String(d.reason||d.service||'Atendimento'),
+    payment:String(d.payment||'—'),
+    date:String(d.date||''),
+    time:String(d.time||''),
+    duration:Number(d.duration||20),
+    blocks:Number(d.blocks||1),
+    status:String(d.status||'Agendado'),
+    source:'shared-demo'
+  });
+}
+async function refreshSharedAppointments(){
+  if(sharedRefreshCount>=sharedRefreshLimit)return;
+  sharedRefreshCount++;
+  try{
+    const response=await fetch(sharedDemoApi.endpoint,{cache:'no-store'});
+    if(!response.ok)throw new Error('HTTP '+response.status);
+    const objects=await response.json();
+    sharedAppointments=(Array.isArray(objects)?objects:[])
+      .filter(item=>item&&item.data&&item.data.projectKey===sharedDemoApi.projectKey&&item.data.type==='appointment')
+      .map(remoteToBooking);
+    render();
+  }catch(error){
+    /* O painel continua com os dados fictícios e registros locais caso
+       a base demonstrativa esteja temporariamente indisponível. */
+    console.warn('[Sem Fila] Não foi possível atualizar os agendamentos compartilhados.',error);
+  }
+}
+
 const moduleMeta={
   overview:['Visão geral','Acompanhamento executivo da modalidade'],
   agenda:['Agenda','Capacidade, horários e comportamento operacional'],
@@ -150,7 +200,12 @@ function currentDataset(){
   const dateSet=new Set(period.dates);
 
   let appointments=period.dates.flatMap(d=>seeded(d));
-  appointments.push(...saved().filter(b=>dateSet.has(b.date)).map(normalizeBooking));
+  const localAppointments=saved().filter(b=>dateSet.has(b.date)).map(normalizeBooking);
+  const localKeys=new Set(localAppointments.map(sharedBookingKey).filter(Boolean));
+  const remoteAppointments=sharedAppointments
+    .filter(b=>dateSet.has(b.date))
+    .filter(b=>!localKeys.has(sharedBookingKey(b)));
+  appointments.push(...localAppointments,...remoteAppointments);
 
   let digital=period.dates.flatMap(d=>seededDigital(d));
   digital.push(...savedDigital().filter(x=>dateSet.has(x.date)).map(x=>({...x,status:x.status||'pending'})));
@@ -201,7 +256,14 @@ function previousPeriod(period){
   const prevEnd=dateISO(addDays(new Date(period.start+'T12:00:00'),-1));
   const prevStart=dateISO(addDays(new Date(prevEnd+'T12:00:00'),-(currentDays-1)));
   const dates=datesBetween(prevStart,prevEnd);
+  const dateSet=new Set(dates);
   let appointments=dates.flatMap(d=>seeded(d));
+  const localAppointments=saved().filter(b=>dateSet.has(b.date)).map(normalizeBooking);
+  const localKeys=new Set(localAppointments.map(sharedBookingKey).filter(Boolean));
+  const remoteAppointments=sharedAppointments
+    .filter(b=>dateSet.has(b.date))
+    .filter(b=>!localKeys.has(sharedBookingKey(b)));
+  appointments.push(...localAppointments,...remoteAppointments);
   let digital=dates.flatMap(d=>seededDigital(d));
   if(state.sector!=='Todos'){
     appointments=appointments.filter(x=>String(x.sector||'').includes(state.sector));
@@ -461,3 +523,6 @@ const today=dateISO(new Date());
 $('#startDate').value=today;
 $('#endDate').value=today;
 render();
+refreshSharedAppointments();
+setInterval(()=>{if(!document.hidden)refreshSharedAppointments()},sharedDemoApi.refreshMs);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshSharedAppointments()});
