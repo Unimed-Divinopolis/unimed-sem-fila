@@ -18,8 +18,6 @@ const sharedDemoApi={
   refreshMs:30000
 };
 let sharedAppointments=[];
-let sharedRefreshCount=0;
-const sharedRefreshLimit=30;
 function sharedBookingKey(b){return String((b&&(b.protocol||b.id))||'')}
 function remoteToBooking(item){
   const d=item&&item.data||{};
@@ -42,8 +40,6 @@ function remoteToBooking(item){
   });
 }
 async function refreshSharedAppointments(){
-  if(sharedRefreshCount>=sharedRefreshLimit)return;
-  sharedRefreshCount++;
   try{
     const response=await fetch(sharedDemoApi.endpoint,{cache:'no-store'});
     if(!response.ok)throw new Error('HTTP '+response.status);
@@ -85,15 +81,16 @@ function isClosedDateISO(iso){
 }
 function isFutureDateISO(iso){return iso>dateISO(new Date())}
 function isTodayISO(iso){return iso===dateISO(new Date())}
-function statusForSeed(date,time,seedStatus){
-  if(isFutureDateISO(date))return'Agendado';
-  if(isTodayISO(date)){
-    const now=new Date();
-    const [hh,mm]=String(time||'00:00').split(':').map(Number);
-    const slot=new Date();slot.setHours(hh||0,mm||0,0,0);
-    if(slot>now)return'Agendado';
-  }
-  return seedStatus;
+function slotDateTime(date,time){return new Date(`${date}T${String(time||'00:00')}:00`)}
+function isFutureSlot(date,time){return slotDateTime(date,time).getTime()>Date.now()}
+function historicalDemoStatus(date,time,currentStatus,key=''){
+  if(currentStatus==='Cancelado'||currentStatus==='Concluído'||currentStatus==='Falta')return currentStatus;
+  const h=hashString(`${date}|${time}|${key}`);
+  return h%9===0?'Falta':'Concluído';
+}
+function statusForSeed(date,time,seedStatus,key=''){
+  if(isFutureSlot(date,time))return seedStatus==='Cancelado'?'Cancelado':'Agendado';
+  return historicalDemoStatus(date,time,seedStatus,key);
 }
 function addDays(d,n){
   const x=new Date(d);x.setDate(x.getDate()+n);return x;
@@ -150,7 +147,7 @@ function seeded(date){
     const inter=service==='Intercâmbio'||(idx+h)%11===0;
     const historicalStatus=(idx+h)%17===0?'Cancelado':(idx+h)%12===0?'Falta':(idx+h)%3===0?'Concluído':'Agendado';
     const time=times[(idx+h)%times.length];
-    const status=statusForSeed(date,time,historicalStatus);
+    const status=statusForSeed(date,time,historicalStatus,String(i));
     const duration=service.includes('+')?40:20;
 
     arr.push({
@@ -198,9 +195,12 @@ function seededDigital(date){
 }
 function normalizeBooking(b){
   const normalized={...b,sector:b.sector||sectorFromService(b.service)};
-  if(isFutureDateISO(String(normalized.date||''))&&['Concluído','Falta','Resolvido'].includes(normalized.status)){
-    normalized.status='Agendado';
-  }
+  const date=String(normalized.date||'');
+  const time=String(normalized.time||'00:00');
+  const original=String(normalized.status||'Agendado');
+  if(original==='Cancelado')normalized.status='Cancelado';
+  else if(isFutureSlot(date,time))normalized.status='Agendado';
+  else normalized.status=historicalDemoStatus(date,time,original,sharedBookingKey(normalized));
   return normalized;
 }
 function datesBetween(start,end){
@@ -231,10 +231,10 @@ function currentDataset(){
   const dateSet=new Set(period.dates);
 
   let appointments=period.dates.flatMap(d=>seeded(d));
-  const localAppointments=saved().filter(b=>dateSet.has(b.date)).map(normalizeBooking);
+  const localAppointments=saved().filter(b=>dateSet.has(b.date)&&!isClosedDateISO(b.date)).map(normalizeBooking);
   const localKeys=new Set(localAppointments.map(sharedBookingKey).filter(Boolean));
   const remoteAppointments=sharedAppointments
-    .filter(b=>dateSet.has(b.date))
+    .filter(b=>dateSet.has(b.date)&&!isClosedDateISO(b.date))
     .filter(b=>!localKeys.has(sharedBookingKey(b)));
   appointments.push(...localAppointments,...remoteAppointments);
 
@@ -287,10 +287,10 @@ function previousPeriod(period){
   const dates=datesBetween(prevStart,prevEnd);
   const dateSet=new Set(dates);
   let appointments=dates.flatMap(d=>seeded(d));
-  const localAppointments=saved().filter(b=>dateSet.has(b.date)).map(normalizeBooking);
+  const localAppointments=saved().filter(b=>dateSet.has(b.date)&&!isClosedDateISO(b.date)).map(normalizeBooking);
   const localKeys=new Set(localAppointments.map(sharedBookingKey).filter(Boolean));
   const remoteAppointments=sharedAppointments
-    .filter(b=>dateSet.has(b.date))
+    .filter(b=>dateSet.has(b.date)&&!isClosedDateISO(b.date))
     .filter(b=>!localKeys.has(sharedBookingKey(b)));
   appointments.push(...localAppointments,...remoteAppointments);
   let digital=dates.flatMap(d=>seededDigital(d));
@@ -555,4 +555,5 @@ $('#endDate').value=today;
 render();
 refreshSharedAppointments();
 setInterval(()=>{if(!document.hidden)refreshSharedAppointments()},sharedDemoApi.refreshMs);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshSharedAppointments()});
+setInterval(()=>{if(!document.hidden)render()},30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){render();refreshSharedAppointments()}});
