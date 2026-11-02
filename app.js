@@ -142,6 +142,20 @@ function show(id,step){$$('.screen').forEach(x=>x.classList.remove('active'));$(
 function updateProgress(step){$$('.progress-step').forEach((x,i)=>x.classList.toggle('active',i<step));$$('.progress-connector').forEach((x,i)=>x.classList.toggle('active',i<step-1))}
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
 function dateISO(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
+
+/* Calendário operacional 2026 — Divinópolis.
+   Não há atendimento presencial aos sábados, domingos e feriados. */
+const closedDates2026=new Set([
+  '2026-01-01','2026-04-03','2026-04-21','2026-05-01',
+  '2026-06-01','2026-06-04','2026-09-07','2026-10-12',
+  '2026-11-02','2026-11-15','2026-11-20','2026-12-07','2026-12-25'
+]);
+function isClosedDateISO(iso){
+  if(!iso)return true;
+  const d=new Date(iso+'T12:00:00');
+  return d.getDay()===0||d.getDay()===6||closedDates2026.has(iso);
+}
+function isBusinessDate(d){return !isClosedDateISO(dateISO(d))}
 function brDate(iso){if(!iso)return'—';const[y,m,d]=iso.split('-');return`${d}/${m}/${y}`}
 function escapeHtml(v=''){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 function formatCard(v){const d=v.replace(/\D/g,'').slice(0,17);let o=d.slice(0,4);if(d.length>4)o+='.'+d.slice(4,8);if(d.length>8)o+='.'+d.slice(8,16);if(d.length>16)o+='-'+d.slice(16);return o}
@@ -154,11 +168,11 @@ function durationBlocks(){return state.wantsExtra&&state.extraService?2:1}
 function durationMinutes(){return durationBlocks()*20}
 function serviceLabel(){return state.wantsExtra&&state.extraService?`${state.service.name} + ${state.extraService.name}`:state.service.name}
 function reasonLabel(){return state.wantsExtra&&state.extraService?`${state.reason} | ${state.extraReason}`:state.reason}
-function businessDates(n=10){const out=[];let d=new Date();d.setHours(12,0,0,0);while(out.length<n){if(d.getDay()!==0&&d.getDay()!==6)out.push(new Date(d));d.setDate(d.getDate()+1)}return out}
+function businessDates(n=10){const out=[];let d=new Date();d.setHours(12,0,0,0);while(out.length<n){if(isBusinessDate(d))out.push(new Date(d));d.setDate(d.getDate()+1)}return out}
 function deterministicOccupied(date,time){const sum=[...date+time].reduce((a,c)=>a+c.charCodeAt(0),0);return sum%7===0||sum%13===0}
 function bookingTimes(b){const idx=baseSlots.indexOf(b.time);if(idx<0)return[b.time];const group=slotGroups.find(g=>g.includes(b.time));const gi=group.indexOf(b.time);return group.slice(gi,gi+(b.blocks||1))}
 function occupied(date,time){if(deterministicOccupied(date,time))return true;return store().some(b=>b.date===date&&b.status!=='Cancelado'&&bookingTimes(b).includes(time))}
-function canStart(date,time){const group=slotGroups.find(g=>g.includes(time));if(!group)return false;const i=group.indexOf(time),blocks=durationBlocks();if(i+blocks>group.length)return false;return group.slice(i,i+blocks).every(t=>!occupied(date,t))}
+function canStart(date,time){if(isClosedDateISO(date))return false;const group=slotGroups.find(g=>g.includes(time));if(!group)return false;const i=group.indexOf(time),blocks=durationBlocks();if(i+blocks>group.length)return false;return group.slice(i,i+blocks).every(t=>!occupied(date,t))}
 function bookingDateTime(b){return new Date(`${b.date}T${b.time}:00`)}
 function canCancel(b){return bookingDateTime(b).getTime()-Date.now()>=2*60*60*1000}
 function protocol(){return'SF-'+String(Date.now()).slice(-9)}

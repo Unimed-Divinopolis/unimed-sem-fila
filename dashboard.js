@@ -70,6 +70,31 @@ const moduleMeta={
 function dateISO(d){
   return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);
 }
+
+/* Calendário operacional 2026 — Divinópolis.
+   O painel não cria capacidade/agendamentos fictícios em fins de semana ou feriados. */
+const closedDates2026=new Set([
+  '2026-01-01','2026-04-03','2026-04-21','2026-05-01',
+  '2026-06-01','2026-06-04','2026-09-07','2026-10-12',
+  '2026-11-02','2026-11-15','2026-11-20','2026-12-07','2026-12-25'
+]);
+function isClosedDateISO(iso){
+  if(!iso)return true;
+  const d=new Date(iso+'T12:00:00');
+  return d.getDay()===0||d.getDay()===6||closedDates2026.has(iso);
+}
+function isFutureDateISO(iso){return iso>dateISO(new Date())}
+function isTodayISO(iso){return iso===dateISO(new Date())}
+function statusForSeed(date,time,seedStatus){
+  if(isFutureDateISO(date))return'Agendado';
+  if(isTodayISO(date)){
+    const now=new Date();
+    const [hh,mm]=String(time||'00:00').split(':').map(Number);
+    const slot=new Date();slot.setHours(hh||0,mm||0,0,0);
+    if(slot>now)return'Agendado';
+  }
+  return seedStatus;
+}
 function addDays(d,n){
   const x=new Date(d);x.setDate(x.getDate()+n);return x;
 }
@@ -107,7 +132,7 @@ function hashString(s){
 }
 function seeded(date){
   const day=new Date(date+'T12:00:00');
-  if(day.getDay()===0||day.getDay()===6)return[];
+  if(isClosedDateISO(date))return[];
 
   const names=['Mariana Souza','Carlos Henrique','Joana Lima','Rafael Martins','Bianca Alves','Paulo César','Fernanda Ribeiro','Lucas Rocha','Camila Mendes','Ricardo Nunes','Helena Duarte','Gustavo Alves'];
   const ages=[15,22,27,34,41,48,56,62,68,31,73,44,18,59,36,66,25,52,61,39,12,29,46,70,33,54,64,23];
@@ -123,7 +148,9 @@ function seeded(date){
     const service=services[(idx+h)%services.length];
     const sector=sectorFromService(service);
     const inter=service==='Intercâmbio'||(idx+h)%11===0;
-    const status=(idx+h)%17===0?'Cancelado':(idx+h)%12===0?'Falta':(idx+h)%3===0?'Concluído':'Agendado';
+    const historicalStatus=(idx+h)%17===0?'Cancelado':(idx+h)%12===0?'Falta':(idx+h)%3===0?'Concluído':'Agendado';
+    const time=times[(idx+h)%times.length];
+    const status=statusForSeed(date,time,historicalStatus);
     const duration=service.includes('+')?40:20;
 
     arr.push({
@@ -136,7 +163,7 @@ function seeded(date){
       reason:service,
       payment:service.includes('Negociação')?((idx+h)%2?'Cartão':'Boleto'):'—',
       date,
-      time:times[(idx+h)%times.length],
+      time,
       duration,
       blocks:duration/20,
       status
@@ -164,13 +191,17 @@ function seededDigital(date){
       date,
       service:s[0],
       sector:s[1],
-      status:r<7?'resolved':r<9?'pending':'not_resolved',
+      status:isFutureDateISO(date)?'pending':(r<7?'resolved':r<9?'pending':'not_resolved'),
       source:(i+h)%3===0?'identificacao':'assuntos'
     };
   });
 }
 function normalizeBooking(b){
-  return{...b,sector:b.sector||sectorFromService(b.service)};
+  const normalized={...b,sector:b.sector||sectorFromService(b.service)};
+  if(isFutureDateISO(String(normalized.date||''))&&['Concluído','Falta','Resolvido'].includes(normalized.status)){
+    normalized.status='Agendado';
+  }
+  return normalized;
 }
 function datesBetween(start,end){
   const out=[];
@@ -217,10 +248,7 @@ function currentDataset(){
   return{appointments,digital,period};
 }
 function businessDayCount(dates){
-  return dates.filter(x=>{
-    const d=new Date(x+'T12:00:00').getDay();
-    return d!==0&&d!==6;
-  }).length||1;
+  return dates.filter(x=>!isClosedDateISO(x)).length;
 }
 function calcMetrics(data,digital,period){
   const active=data.filter(x=>x.status!=='Cancelado');
@@ -229,7 +257,8 @@ function calcMetrics(data,digital,period){
   const noShow=data.filter(x=>x.status==='Falta');
   const multi=active.filter(x=>(x.duration||20)>20);
   const blocks=active.reduce((a,b)=>a+(b.blocks||1),0);
-  const capacity=96*businessDayCount(period.dates);
+  const businessDays=businessDayCount(period.dates);
+  const capacity=96*businessDays;
   const occupancy=Math.min(100,pct(blocks,capacity));
   const avg=active.length?Math.round(active.reduce((a,b)=>a+(b.duration||20),0)/active.length):0;
 
@@ -245,7 +274,7 @@ function calcMetrics(data,digital,period){
     noShowRate:pct(noShow.length,Math.max(1,active.length)),
     multi:multi.length,
     multiRate:pct(multi.length,Math.max(1,active.length)),
-    blocks,capacity,occupancy,avg,
+    blocks,capacity,businessDays,occupancy,avg,
     digitalTotal:digital.length,
     digitalResolved:dResolved,
     digitalRate:dRate
@@ -350,7 +379,8 @@ function renderOverview(data,digital,metrics,prev){
   const topSector=[...sectorRows(data)].sort((a,b)=>b[1]-a[1])[0];
   const insights=[];
 
-  if(metrics.occupancy<50)insights.push(['opportunity',`Ocupação em ${metrics.occupancy}%: há capacidade disponível no período.`]);
+  if(metrics.businessDays===0)insights.push(['info','Sem atendimento presencial no período selecionado: fim de semana ou feriado.']);
+  else if(metrics.occupancy<50)insights.push(['opportunity',`Ocupação em ${metrics.occupancy}%: há capacidade disponível no período.`]);
   else if(metrics.occupancy>80)insights.push(['warning',`Ocupação em ${metrics.occupancy}%: vale acompanhar a capacidade dos horários.`]);
   else insights.push(['good',`Ocupação em ${metrics.occupancy}%: utilização dentro de uma faixa equilibrada.`]);
 
